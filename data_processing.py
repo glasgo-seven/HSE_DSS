@@ -1,42 +1,16 @@
-"""
-	H_CUSTOMER
-		Ship Mode
-		Segment
-
-	H_LOCATION
-		Country
-		City
-		State
-		Postal Code
-		Region
-
-	H_PRODUCT
-		Category
-		Sub-Category
-
-	H_ORDER
-		Sales
-		Quantity
-		Discount
-		Profit
-
-	LINK_ORDER_PRODUCT
-	LINK_ORDER_CUSTOMER
-	LINK_CUSTOMER_LOCATION
-
-
-"""
-import hashlib
 import uuid
 
 import pandas as pd
 import psycopg2
 
-
+# Глобальная переменная подключения к БД
 db_conn = None
 
 
 def log(src, msg):
+	"""
+		Util-функция для форматированного вывода процесса работы программы
+	"""
 	print(f"\033[32m[ {src} ]\033[0m  {msg}")
 
 def connect_to_greenplum():
@@ -51,6 +25,8 @@ def connect_to_greenplum():
 
 	conn = psycopg2.connect((f'host={GP_DB_HOST} port={GP_DB_PORT} dbname={GP_DB_NAME} user={GP_DB_USER} password={GP_DB_PASS}'))
 	log("data_load_greenplum/connect_to_greenplum()", f"Greenplum is connected")
+	
+	#	Проверка успешности подключения
 	with conn.cursor() as cur:
 		cur.execute("select current_database(), version()")
 		row = cur.fetchone()
@@ -58,7 +34,17 @@ def connect_to_greenplum():
 
 	return conn
 
+def disconnect_from_db():
+	if db_conn:
+		db_conn.close()
+		log("disconnect_from_db()", "Disconnected from Database")
+		return
+	log("disconnect_from_db()", "No Database connected")
+
 def execute_sql_file(sql_file):
+	"""
+		Выполнение содержимого .sql файла в подключенной БД
+	"""
 	sql = open(sql_file, "r", encoding="utf-8").read()
 
 	with db_conn.cursor() as cur:
@@ -76,7 +62,6 @@ def data_preprocessing():
 		H_LOCATION	= Country + City + State + Postal Code + Region	<br>
 		H_PRODUCT	= Category + Sub-Category						<br>
 		H_SHIPPING	= Ship Mode										<br>
-		(-) H_ORDER		= Sales + Quantity + Discount + Profit			<br>
 	"""
 	df = pd.read_csv("./SampleSuperstore.csv")
 
@@ -84,8 +69,7 @@ def data_preprocessing():
 		'H_CUSTOMER'	: ['Segment', 'State', 'City', 'Postal Code'],
 		'H_LOCATION'	: ['Country', 'City', 'State', 'Postal Code', 'Region'],
 		'H_PRODUCT'		: ['Category', 'Sub-Category'],
-		'H_SHIPPING'	: ['Ship Mode'],
-		# 'H_ORDER'		: ['Sales', 'Quantity', 'Discount', 'Profit'],
+		'H_SHIPPING'	: ['Ship Mode']
 	}
 
 	for hub, fields in hubs.items():
@@ -101,6 +85,9 @@ def data_preprocessing():
 	df.to_csv('./SampleSuperstore_processed.csv', index=False)
 
 def copy_data_from_csv():
+	"""
+		Перенос содержимого .csv файла в подключенную БД
+	"""
 	with db_conn.cursor() as cur:
 		# Очищение данных в Superstore
 		cur.execute("TRUNCATE TABLE student2.superstore")
@@ -115,9 +102,6 @@ def copy_data_from_csv():
 		)
 		with open("./SampleSuperstore_processed.csv", "r", encoding="utf-8") as f:
 			cur.copy_expert(query, f)
-			# with cur.copy_expert(query, f) as copy:
-			# 	while data := f.read(8192):
-			# 		copy.write(data)
 	
 	db_conn.commit()
 
@@ -128,38 +112,27 @@ def copy_data_from_csv():
 		return int(rowcount)
 
 def data_load_greenplum():
+	"""
+		Загрузка данных в GreenPlum БД
+	"""
 	global db_conn
 	db_conn = connect_to_greenplum()
-	# df = pd.read_csv("./SampleSuperstore_processed.csv")
 
-	# hubs = ['H_CUSTOMER', 'H_LOCATION', 'H_PRODUCT', 'H_SHIPPING', 'H_ORDER']
-	# for hub in hubs:
-	# 	df_hub = df[[f'{hub}_ID']].drop_duplicates()
-	# 	df_hub[f'{hub}_Hash'] = df_hub[f'{hub}_ID'].apply(
-	# 		lambda x : hashlib.md5(x.encode()).hexdigest()
-	# 	)
-	# 	df_hub['H_Load_Source']	= 'SampleSuperstore_processed.csv'
-	# 	df_hub['H_Load_Date']	= pd.Timestamp.now()
-
-	# 	df_hub.to_sql(
-	# 		hub,
-	# 		con=engine,
-	# 		schema='student2',
-	# 		if_exists='replace',
-	# 		index=False,
-	# 		method='multi'
-	# 	)
-
-	# 	print("data_load_greenplum()", f"{hub}\tis appended to student2/hse")
-
-	execute_sql_file("./00_init_create.sql")
+	execute_sql_file("./sql/00_init_create.sql")
 
 	rows = copy_data_from_csv()
 	log("data_load_greenplum()", f"Rows uploaded to 'student2.superstore': {rows}")
 
-	execute_sql_file("./10_create_DV_tables.sql")
+	execute_sql_file("./sql/10_create_DV_hubs.sql")
+	execute_sql_file("./sql/11_create_DV_links.sql")
+	execute_sql_file("./sql/12_create_DV_sats.sql")
+
+	execute_sql_file("./sql/20_populate_hubs.sql")
+	execute_sql_file("./sql/21_populate_links.sql")
+	execute_sql_file("./sql/22_populate_sats.sql")
 
 
 if __name__ == "__main__":
 	data_preprocessing()
 	data_load_greenplum()
+	disconnect_from_db()
