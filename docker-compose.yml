@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  spark-master:
+    build: .
+    container_name: spark-master
+    hostname: spark-master
+    ports:
+      - "4040:4040"
+      - "7077:7077"
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./main.py:/app/main.py
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    command: >
+      bash -c "
+        spark-class org.apache.spark.deploy.master.Master
+        --host spark-master
+        --port 7077
+        --webui-port 8080
+      "
+
+  spark-worker:
+    build: .
+    container_name: spark-worker
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=4g
+      - SPARK_WORKER_CORES=4
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./main.py:/app/main.py
+    command: >
+      bash -c "
+        sleep 10 &&
+        spark-class org.apache.spark.deploy.worker.Worker
+        --webui-port 8081
+        spark://spark-master:7077
+      "
+
+  spark-app:
+    build: .
+    container_name: spark-app
+    depends_on:
+      - spark-master
+      - spark-worker
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./main.py:/app/main.py
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+    command: >
+      bash -c "
+        sleep 15 &&
+        python /app/main.py
+      "
